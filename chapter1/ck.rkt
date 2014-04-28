@@ -102,51 +102,46 @@
   (string->symbol (string-append "#" (number->string the-temp-idx))))
 
 ; continuation
-(struct end-cont ())
-
-(struct continuation (cont data))
-(struct data-arg-cont (rand-exp))
-(struct data-fun-cont (rator))
-(struct data-opt-cont (opt exps vals))
+(define (end-cont)
+  (list
+   (lambda (v)
+     (begin
+       (displayln ">> Done!")
+       v))))
 
 (define (arg-cont cont rand-exp)
-  (continuation cont (data-arg-cont rand-exp)))
-(define (apply-arg-cont cont rand-exp v)
-  (value-of/k rand-exp (fun-cont cont v)))
+  (list
+   (lambda (v cont rand-exp)
+     (value-of/k rand-exp (fun-cont cont v)))
+   cont
+   rand-exp))
 
 (define (fun-cont cont rator)
-  (continuation cont (data-fun-cont rator)))
-(define (apply-fun-cont cont rator v)
-  (match rator
-    [`(lambda ,var ,body)
-     (value-of/k (substitute body var v) cont)]))
+  (list
+   (lambda (v cont rator)
+     (match rator
+       [`(lambda ,var ,body)
+        (value-of/k (substitute body var v) cont)]))
+   cont
+   rator))
 
 (define (opt-cont cont opt exps vals)
-  (continuation cont (data-opt-cont opt exps vals)))
-(define (apply-opt-cont cont opt exps vals v)
-  (if (null? exps)
-      (value-of/k (apply opt (append vals (list v))) cont)
-      (value-of/k (car exps)
-                  (opt-cont cont opt (cdr exps) (append vals (list v))))))
+  (list
+   (lambda (v cont opt exps vals)
+     (if (null? exps)
+         (value-of/k (apply opt (append vals (list v))) cont)
+         (value-of/k (car exps)
+                     (opt-cont cont opt (cdr exps) (append vals (list v))))))
+   cont
+   opt
+   exps
+   vals))
 
 (define (apply-cont cont v)
-    (if (end-cont? cont)
-        (begin
-          (displayln ">> Done!")
-          v)
-        (let ((up-cont (continuation-cont cont))
-              (data (continuation-data cont)))
-          (cond
-           [(data-arg-cont? data)
-            (apply-arg-cont up-cont (data-arg-cont-rand-exp data) v)]
-           [(data-fun-cont? data)
-            (apply-fun-cont up-cont (data-fun-cont-rator data) v)]
-           [(data-opt-cont? data)
-            (apply-opt-cont up-cont
-                            (data-opt-cont-opt data)
-                            (data-opt-cont-exps data)
-                            (data-opt-cont-vals data)
-                            v)]))))
+  (let ((proc (car cont))
+        (args (cdr cont)))
+    (apply proc (cons v args))))
+
 ; test
 (require "test-cases.rkt")
 (test interp iswim-cases)

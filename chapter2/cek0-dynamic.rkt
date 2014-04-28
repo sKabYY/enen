@@ -78,7 +78,7 @@
 (define (apply-closure/k clo arg-clo cont)
   (match (closure-exp clo)
     [`(lambda ,arg ,body)
-     (value-of/k (closure body (extend-env (closure-env clo) arg arg-clo)) cont)]))
+     (value-of/k (closure body (extend-env (closure-env arg-clo) arg arg-clo)) cont)]))
 
 ; environment
 (struct empty-env () #:transparent)
@@ -132,4 +132,4 @@
 
 ; test
 (require "test-cases.rkt")
-(test interp cek-cases)
+(test interp cek0-dynamic-cases)

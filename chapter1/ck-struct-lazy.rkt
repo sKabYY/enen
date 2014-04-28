@@ -102,37 +102,43 @@
   (string->symbol (string-append "#" (number->string the-temp-idx))))
 
 ; continuation
-(define (end-cont)
-  (list
-   (lambda (v)
-     (begin
-       (displayln ">> Done!")
-       v))))
+(struct end-cont ())
+
+(struct continuation (cont data))
+(struct data-arg-cont (rand-exp))
+(struct data-opt-cont (opt exps vals))
 
 (define (arg-cont cont rand-exp)
-  (list
-   (lambda (v cont rand-exp)
-     (match v
-       [`(lambda ,var ,body)
-        (value-of/k (substitute body var rand-exp) cont)]))
-   cont
-   rand-exp))
+  (continuation cont (data-arg-cont rand-exp)))
+(define (apply-arg-cont cont rand-exp v)
+  (match v
+    [`(lambda ,var ,body)
+     (value-of/k (substitute body var rand-exp) cont)]))
 
 (define (opt-cont cont opt exps vals)
-  (list
-   (lambda (v cont opt exps vals)
-     (if (null? exps)
-         (value-of/k (apply opt (append vals (list v))) cont)
-         (value-of/k (car exps)
-                     (opt-cont cont opt (cdr exps) (append vals (list v))))))
-   cont
-   opt
-   exps
-   vals))
+  (continuation cont (data-opt-cont opt exps vals)))
+(define (apply-opt-cont cont opt exps vals v)
+  (if (null? exps)
+      (value-of/k (apply opt (append vals (list v))) cont)
+      (value-of/k (car exps)
+                  (opt-cont cont opt (cdr exps) (append vals (list v))))))
 
 (define (apply-cont cont v)
-  (apply (car cont) (cons v (cdr cont))))
-
+    (if (end-cont? cont)
+        (begin
+          (displayln ">> Done!")
+          v)
+        (let ((up-cont (continuation-cont cont))
+              (data (continuation-data cont)))
+          (cond
+           [(data-arg-cont? data)
+            (apply-arg-cont up-cont (data-arg-cont-rand-exp data) v)]
+           [(data-opt-cont? data)
+            (apply-opt-cont up-cont
+                            (data-opt-cont-opt data)
+                            (data-opt-cont-exps data)
+                            (data-opt-cont-vals data)
+                            v)]))))
 ; test
 (require "test-cases.rkt")
 (test interp iswim-lazy-cases)
