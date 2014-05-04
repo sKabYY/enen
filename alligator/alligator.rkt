@@ -15,7 +15,7 @@
 ; Value = Number
 ;       | Boolean
 ;       | Closure
-;       | Opt
+;       | Opd
 ;       | <void>
 ;       | Mutpair
 ;       | Continuation
@@ -23,7 +23,7 @@
 ; Closure: (Variable*) * Expression * Environment
 ; Mutpair: Reference * Reference
 ;
-; Opt:
+; Opd:
 ;  ifv: Boolean * T * T -> T
 ;  +: Number * Number * ... -> Number
 ;  -: Number * Number * ...-> Number
@@ -125,7 +125,9 @@
        (value-of/k body (extend-env-letrec env vars argss bodies) cont))]
     ; a begin expression
     [`(begin . ,exps)
-     (apply-cont (begin-cont cont env exps) (void))]
+     (if (null? exps)
+         (apply-cont cont (void))
+         (apply-cont (begin-cont cont env exps) (void)))]
     ; a set expression
     [`(set! ,v ,e)
      (value-of/k e env (set-cont cont env v))]
@@ -218,7 +220,7 @@
   (vector-set! the-store (reference-n ref) val))
 
 (define (store-info)
-  (let* ((start (length opt-table))
+  (let* ((start (length opd-table))
          (size (- the-store-offset start))
          (vec (make-vector size)))
     (define (iter i)
@@ -255,15 +257,17 @@
       ('apply app-func))))
 
 (define (begin-cont cont env exps)
+  ; assert (not (null? exps))
   (cont-with-env
    cont
    env
-   (lambda (v)
-     (if (null? exps)
-         (apply-cont cont v)
-         (value-of/k (car exps)
-                     env
-                     (begin-cont cont env (cdr exps)))))))
+   (lambda (_)
+     (let ((rest (cdr exps)))
+       (if (null? rest)
+           (value-of/k (car exps) env cont)
+           (value-of/k (car exps)
+                       env
+                       (begin-cont cont env rest)))))))
 
 (define (set-cont cont env var)
   (cont-with-env
@@ -344,8 +348,8 @@
        (env (closure-env clo)))
    (value-of/k body (extend-env-let env args vals) cont)))
 
-; opt
-(struct operator (name opt) #:transparent)
+; opd
+(struct operation (name opd) #:transparent)
 (struct mutpair (left-ref right-ref) #:transparent)
 
 (define (-ifv b v1 v2) (if (true? b) v1 v2))
@@ -366,9 +370,9 @@
 (define (true? x) (eqv? x #t))
 (define (false? x) (eqv? x #f))
 
-(define opt-table
+(define opd-table
   (map (lambda (p)
-         (cons (car p) (operator (car p) (cdr p))))
+         (cons (car p) (operation (car p) (cdr p))))
        (list
         (cons 'ifv -ifv)
         (cons '+ +)
@@ -385,10 +389,10 @@
         (cons 'print -print))))
 
 (define (init-env)
-  (extend-env-let (empty-env) (map car opt-table) (map cdr opt-table)))
+  (extend-env-let (empty-env) (map car opd-table) (map cdr opd-table)))
 
-(define (apply-opt/k opt vals cont)
-  (apply-cont cont (apply (operator-opt opt) vals)))
+(define (apply-opd/k opd vals cont)
+  (apply-cont cont (apply (operation-opd opd) vals)))
 
 ; apply-proc
 (struct contval (val))  ; continuation value
@@ -396,7 +400,7 @@
 (define (apply-proc/k proc vals cont)
   (cond
    [(closure? proc) (apply-closure/k proc vals cont)]
-   [(operator? proc) (apply-opt/k proc vals cont)]
+   [(operation? proc) (apply-opd/k proc vals cont)]
    [(contval? proc)
     (if (= 1 (length vals))
         (apply-cont (contval-val proc) (car vals))
@@ -453,6 +457,7 @@
                  (v (vector-ref the-store i)))
             (set! grays (cdr grays))
             (vector-set! flags i 'black)
+            ;(printf "~a: ~a~%" i v)
             (mark-val v))
           (iter))))
   (begin

@@ -106,18 +106,37 @@
                         (gcd (remainder b a) a))))
   (gcd 144 12144)) 48
 
+(letrec ((gcd (a b) (if (zero? a)
+                        b
+                        (gcd (remainder b a) a))))
+  ((lambda (a b c) (gcd a b)) 144 12144 444)) 48
+
 (((lambda (x) x) +) 12 23) 35
 
 (begin) ,(void)
+(begin 12) 12
 
 (let ((a 1))
   (begin
     (set! a 2)
     a)) 2
 
-(begin
-  (set! + 777)
-  +) 777
+(letrec ((f (n) (if (zero? n) 0 (f (- n 1)))))
+  (f 100)) 0
+
+(letrec ((f (n) (if (zero? n) 0 (begin (f (- n 1))))))
+  (f 100)) 0
+
+(letrec ((f (a n) (if (zero? n) a (begin (f (+ a n) (- n 1))))))
+  (f 0 100)) 5050
+
+(let ((a 0))
+  (letrec ((sum! (n) (if (zero? n)
+                         a
+                         (begin
+                           (set! a (+ a n))
+                           (sum! (- n 1))))))
+    (sum! 100))) 5050
 
 (print 777) ,(void)
 
@@ -193,5 +212,21 @@
 (catch
  (let ((a 1)) (+ (letcc k (+ 122 (raise k))) a))
  k (let ((a 10)) (cc k a))) 11
+
+((lambda (a b) (set! a b)) 10 12) ,(void)
+
+(let ((+ (+ 101 10)))
+  (begin (set! + 222) +)) 222
+
+(let ((a 111))
+  (+ a (let ((a 222))
+         (begin
+           (set! a 999)
+           a)))) 1110
+
+((lambda (a b)
+   ((lambda (x y) (+ a x y)) a b))
+ 11
+ 22) 44
 
 ))

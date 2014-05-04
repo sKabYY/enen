@@ -16,7 +16,7 @@
 ; Value = Number
 ;       | Boolean
 ;       | Closure
-;       | Opt
+;       | Opd
 ;       | <void>
 ;       | Mutpair
 ;       | Continuation
@@ -24,7 +24,7 @@
 ; Closure: (Variable*) * Expression * Environment
 ; Mutpair: Reference * Reference
 ;
-; Opt:
+; Opd:
 ;  void: () -> <void>
 ;  +: Number * Number * ... -> Number
 ;  -: Number * Number * ...-> Number
@@ -64,41 +64,57 @@
 ; TfExp = SiExp
 ;       | (letrec ((Variable (Variable*) TfExp)*) TfExp)
 ;       | (if SiExp TfExp TfExp)
-;       | (set! Variable SiExp Cont ECont)
-;       | (SiExp SiExp* Cont ECont)
+;       | (set! Variable SiExp SiExp) ; (set! var val cont)
+;       | (app SiExp SiExp* SiExp SiExp) ; (app fun args* cont econt)
 ;
 ; Cont = ECont = Variable | (lambda (Variable) TfExp)
 ;
 ; Value = Number
 ;       | Boolean
 ;       | Closure
-;       | Opt/k
+;       | Opd/k
 ;       | <void>
 ;       | Mutpair
 ;
-; (opt/k args... cont econt) = (cont (opt args...))
+; (opd/k args... cont econt) = (cont (opd args...))
 
 (define the-max-store-size 96)
 (define (interp exp1)
   (reset-space-cost!)
   (initialize-store! the-max-store-size)
-  (let ((cps-exp (cps-translate (macro-translate exp1)
-                                '(lambda (v) v)
-                                '(lambda (e) e)
-                                (mk-newvar))))
+  (init-newvar!)
+  (let* ((cps-exp (cps-translate (opd-translate
+                                  (macro-translate exp1))
+                                 '(lambda (v) v)
+                                 '(lambda (e) e)))
+         (opd-exp (optimize cps-exp)))
     (displayln "CPS:")
     (pretty-print cps-exp)
-    (let ((ret (value-of cps-exp (init-env))))
+    (if (not (cmp-exp cps-exp opd-exp))
+        (begin
+          (displayln "optimized:")
+          (pretty-print opd-exp))
+        (void))
+    (let ((ret (value-of opd-exp (init-env))))
       ;(displayln (store-info))
       (printf "#SpaceCost=~a~%" the-space-cost)
       ret)) )
+
+(define (cmp-exp e1 e2)
+  (if (and (pair? e1) (pair? e2))
+      (and (cmp-exp (car e1) (car e2))
+           (cmp-exp (cdr e1) (cdr e2)))
+      (eqv? e1 e2)))
+
+(define (constant? x)
+  (or (number? x) (boolean? x)))
 
 (define the-space-cost 0)
 (define (reset-space-cost!)
   (set! the-space-cost 0))
 (define (update-space-cost!)
   (let ((cost (- the-store-offset
-                 (length opt-table)
+                 the-num-opds
                  (length the-store-free-list))))
     (set! the-space-cost (max the-space-cost cost))))
 
@@ -116,13 +132,15 @@
     ; a boolean
     [(? boolean? b) b]
     ; a procedure
-    [`(lambda ,a ,b) `(lambda ,a ,(>> b))]
+    [`(lambda ,as ,b) `(lambda ,as ,(>> b))]
     ; a letrec expression
     [`(letrec ,decs ,body)
      `(letrec ,(map (lambda (dec)
-                      (list (dec-var dec) (dec-args dec) (>> (dec-body dec))))
+                      `(,(dec-var dec) ,(dec-args dec) ,(>> (dec-body dec))))
                     decs)
         ,(>> body))]
+    ; a if expression
+    [`(if ,e1 ,e2 ,e3) `(if ,(>> e1) ,(>> e2) ,(>> e3))]
     ; a begin expression
     [`(begin . ,exps) `(begin . ,(map >> exps))]
     ; a set expression
@@ -133,8 +151,6 @@
     [`(raise ,e) `(raise ,(>> e))]
     ; a catch expression
     [`(catch ,body ,var ,p-body) `(catch ,(>> body) ,var ,(>> p-body))]
-    ; a if expression
-    [`(if ,e1 ,e2 ,e3) `(if ,(>> e1) ,(>> e2) ,(>> e3))]
     ; a let expression
     [`(let ,decs ,body)
      (let ((vars (map car decs))
@@ -149,25 +165,44 @@
     [`(,ef . ,exps) `(,(>> ef) . ,(map >> exps))]))
 
 ; tmp variable
-(define (mk-newvar)
-  (let ((i 0))
-    (lambda ()
-      (set! i (+ i 1))
-      (string->symbol
-       (string-append "#" (number->string i))))))
+(define the-newvar-count 'uninitialized)
+(define (init-newvar!) (set! the-newvar-count 0))
+(define (newvar)
+  (set! the-newvar-count (+ the-newvar-count 1))
+  (string->symbol
+       (string-append "#" (number->string the-newvar-count))))
 
 ; a variable stands for continuation
-(define vark (string->symbol "#k"))
-(define varek (string->symbol "#ek"))
+(define (mkvar s)
+  (string->symbol (string-append "#" (symbol->string s))))
+(define vark (mkvar 'k))
+(define varek (mkvar 'ek))
 
 ; a variable stands for useless arguement
-(define var_ (string->symbol "#_"))
+(define var_ (mkvar '_))
 
 (define (pushback lst . vs) (append lst vs))
 
 (define (list-last lst)
   ; assert (not (null? lst))
   (if (null? (cdr lst)) (car lst) (list-last (cdr lst))))
+
+(define (partition-last2-f lst f)
+  ; assert (>= (length lst) 2)
+  (define (iter racc lst)
+    (if (null? (cddr lst))
+        (f (car lst) (cadr lst) (reverse racc))
+        (iter (cons (car lst) racc) (cdr lst))))
+  (iter '() lst))
+
+(define (list-in? elem lst)
+  (cond
+   [(null? lst) #f]
+   [(eqv? elem (car lst)) #t]
+   [else (list-in? elem (cdr lst))]))
+
+(define (apply-list procs v)
+  (foldl (lambda (f v) (f v)) v procs))
 
 (define (simple-exp? exp1)
   (match exp1
@@ -177,9 +212,44 @@
     [`(lambda ,as ,b) #t]
     [else #f]))
 
-(define (cps-translate exp1 cont econt newvar)
-  (define (>> e) (cps-translate e cont econt newvar))
-  (define (>>/k e k ek) (cps-translate e k ek newvar))
+(define (opd-translate exp1)
+  (define (opd-translate/c exp1 covered-opds)
+    (define (append-opds ss)
+      (append (filter in-opd-table ss) covered-opds))
+    (define (>>/c e ss) (opd-translate/c e (append-opds ss)))
+    (define (>> e) (opd-translate/c e covered-opds))
+    (match exp1
+      [(? symbol? s)
+       (if (and (in-opd-table s)
+                (not (list-in? s covered-opds)))
+           (mkvar s)
+           s)]
+      [(? number? n) n]
+      [(? boolean? b) b]
+      [`(lambda ,as ,b)
+       `(lambda ,as ,(>>/c b as))]
+      [`(letrec ,decs ,body)
+       `(letrec
+            ,(map (lambda (dec)
+                    `(,(dec-var dec)
+                      ,(dec-args dec)
+                      ,(>>/c (dec-body dec) (dec-args dec))))
+                  decs)
+          ,(>>/c body (map dec-var decs)))]
+      [`(if ,e1 ,e2 ,e3) `(if ,(>> e1) ,(>> e2) ,(>> e3))]
+      [`(begin . ,exps)
+       `(begin . ,(map >> exps))]
+      [`(set! ,v ,e) `(set! ,v ,(>> e))]
+      [`(letcc ,v ,e) `(letcc ,v ,(>> e))]
+      [`(raise ,e) `(raise ,(>> e))]
+      [`(catch ,body ,var ,p-body)
+       `(catch ,(>> body) ,var ,(>>/c p-body (list var)))]
+      [(? list? exps) (map >> exps)]))
+  (opd-translate/c exp1 '()))
+
+(define (cps-translate exp1 cont econt)
+  (define (>> e) (cps-translate e cont econt))
+  (define (>>/k e k ek) (cps-translate e k ek))
   (define (>>s sexp)
     (match sexp
       ; a variable
@@ -204,7 +274,7 @@
                       econt))))))
   (match exp1
     ; a SiExp
-    [(? simple-exp? sexp) `(,cont ,(>>s sexp))]
+    [(? simple-exp? sexp) `(app ,cont ,(>>s sexp))]
     ; a letrec expression
     [`(letrec ,decs ,body)
      `(letrec ,(map (lambda (dec)
@@ -215,28 +285,37 @@
         ,(>> body))]
     ; an if expression
     [`(if ,e1 ,e2 ,e3)
-     (let ((w (newvar)))
-       (>>/k e1 `(lambda (,w) (if ,w ,(>> e2) ,(>> e3))) econt))]
+     (if (simple-exp? e1)
+         `(if ,(>>s e1) ,(>> e2) ,(>> e3))
+         (let ((w (newvar)))
+           (>>/k e1 `(lambda (,w) (if ,w ,(>> e2) ,(>> e3))) econt)))]
     ; a begin expression (the begin expression disappears)
     [`(begin . ,exps)
-     (>>lst '(void)
-            exps
-            (lambda (acc v) v)
-            (lambda (acc) (>> acc)))]
+     (if (null? exps)
+         (>> `(,(mkvar 'void)))
+         (let* ((rexps (reverse exps))
+                (last (car rexps))
+                (heads (reverse (cdr rexps))))
+           (>>lst 'not-used-value
+                   heads
+                   (lambda (acc v) v)
+                   (lambda (acc) (>> last)))))]
     ; a set expression
     [`(set! ,v ,e)
      (if (simple-exp? e)
-         `(set! ,v ,(>>s e) ,cont ,econt)
+         `(set! ,v ,(>>s e) ,cont)
          (let ((w (newvar)))
            (>>/k e `(lambda (,w) (set! ,v ,w ,cont)) econt)))]
     ; a letcc expression (the letcc expression disappears)
     [`(letcc ,v ,e)
      (let ((w (newvar)))
-       `((lambda (,v) ,(>> e)) (lambda (,w ,var_ ,var_) (,cont ,w))))]
+       `(app (lambda (,v) ,(>> e)) (lambda (,w ,var_ ,var_) (app ,cont ,w))))]
     ; a raise expression
     [`(raise ,e)
-     (let ((w (newvar)))
-       (>>/k e `(lambda (,w) (,econt ,w)) econt))]
+     (if (simple-exp? e)
+         `(app ,econt ,(>>s e))
+         (let ((w (newvar)))
+           (>>/k e `(lambda (,w) (app ,econt ,w)) econt)))]
     ; a catch expression (the catch expression disappears)
     [`(catch ,body ,var ,p-body)
      (>>/k body cont `(lambda (,var) ,(>> p-body)))]
@@ -246,7 +325,297 @@
             exp1
             (lambda (racc v) (cons v racc))
             (lambda (racc)
-              (pushback (map >>s (reverse racc)) cont econt)))]))
+              `(app . ,(pushback (map >>s (reverse racc)) cont econt))))]))
+
+; optimize
+(define (optimize cps-exp)
+  (define (mark-wrap f)
+    (lambda (e) (unmark-variable
+                 (f
+                  (mark-variable e)))))
+  (define (iter cps-exp)
+    (let ((opd-exp (apply-list (list (mark-wrap beta-reduction)
+                                     (mark-wrap eta-reduction)
+                                     constant-folding)
+                               cps-exp)))
+      (if (cmp-exp opd-exp cps-exp)
+          opd-exp
+          (iter opd-exp))))
+  ;(displayln "mark:")
+  ;(pretty-print (mark-variable cps-exp))
+  (iter cps-exp))
+
+(define (mark-variable cps-exp)
+  (define (>>/e cps-exp menv)
+    (define (>> e) (>>/e e menv))
+    (define (make-scp as)
+      ; entry: (name . #(count dirty?))
+      (map (lambda (a) (cons a (vector 0 #t))) as))
+    (define (try-scp-f f)
+      (lambda (scp s)
+        (let ((entry (assoc s scp)))
+          (if entry
+              (begin
+                (f (cdr entry))
+                #t)
+              #f))))
+    (define (do-menv-f menv s f)
+      (cond
+       [(null? menv) s]
+       [(f (car menv) s) s]
+       [else (do-menv-f (cdr menv) s f)]))
+    (define (add-menv menv s)
+      (do-menv-f
+       menv
+       s
+       (try-scp-f (lambda (vec)
+                    (vector-set! vec 0 (+ 1 (vector-ref vec 0)))))))
+    (define (mark-menv menv s)
+      (do-menv-f
+       menv
+       s
+       (try-scp-f (lambda (vec)
+                    (vector-set! vec 0 (+ 1 (vector-ref vec 0)))
+                    (vector-set! vec 1 #f)))))
+    (match cps-exp
+      [(? symbol? s) (add-menv menv s)]
+      [(? number? n) n]
+      [(? boolean? b) b]
+      [`(lambda ,as ,b)
+       (let* ((scp (make-scp as))
+              (new-body (>>/e b (cons scp menv)))
+              (new-as (map (lambda (ent)
+                             (cons (car ent) (vector->list (cdr ent))))
+                           scp)))
+         `(lambda ,new-as ,new-body))]
+      [`(letrec ,decs ,body)
+       (let ((new-menv (cons (make-scp (map dec-var decs)) menv)))
+         `(letrec ,(map (lambda (dec)
+                          `(,(dec-var dec)
+                            ,(dec-args dec)
+                            ,(>>/e (dec-body dec)
+                                   (cons (make-scp (dec-args dec)) new-menv))))
+                        decs)
+            ,(>>/e body new-menv)))]
+      [`(if ,se ,e2 ,e3) `(if ,(>> se) ,(>> e2) ,(>> e3))]
+      [`(set! ,var ,se ,cont)
+       (begin
+         (mark-menv menv var)
+         `(set! ,var ,(>> se) ,(>> cont)))]
+      [`(app . ,exps) `(app . ,(map >> exps))]))
+  (>>/e cps-exp '()))
+
+(define (unmark-variable cps-exp)
+  (define >> unmark-variable)
+  (match cps-exp
+    [(? symbol? s) s]
+    [(? number? n) n]
+    [(? boolean? b) b]
+    [`(lambda ,as ,b) `(lambda ,(map car as) ,(>> b))]
+    [`(letrec ,decs ,body)
+     `(letrec ,(map (lambda (dec)
+                      `(,(dec-var dec) ,(dec-args dec) ,(>> (dec-body dec))))
+                    decs)
+        ,(>> body))]
+    [`(if ,se ,e2 ,e3) `(if ,(>> se) ,(>> e2) ,(>> e3))]
+    [`(set! ,var ,se ,cont) `(set! ,var ,(>> se) ,(>> cont))]
+    [`(app . ,exps) `(app . ,(map >> exps))]))
+
+(define (pass cps-exp >>)
+  (match cps-exp
+    [(? symbol? s) s]
+    [(? number? n) n]
+    [(? boolean? b) b]
+    [`(lambda ,as ,b) `(lambda ,as ,(>> b))]
+    [`(letrec ,decs ,body)
+     `(letrec ,(map (lambda (dec)
+                      `(,(dec-var dec) ,(dec-args dec) ,(>> (dec-body dec))))
+                    decs)
+        ,(>> body))]
+    [`(if ,se ,e2 ,e3) `(if ,(>> se) ,(>> e2) ,(>> e3))]
+    [`(set! ,var ,se ,cont) `(set! ,var ,(>> se) ,(>> cont))]
+    [`(app . ,exps) `(app . ,(map >> exps))]))
+
+(define (beta-reduction cps-exp)
+  (define (extend-env-all env vars vals)
+    (append (map cons vars vals) env))
+  (define (extend-env env var val)
+    (cons (cons var val) env))
+  (define (apply-env env var)
+    (let ((p (assoc var env))) (if p (cdr p) var)))
+  (define (>>/e cps-exp env)
+    (define (>> e) (>>/e e env))
+    (match cps-exp
+      [(? symbol? s) (apply-env env s)]
+      [`(set! ,var ,se ,cont) `(set! ,(>> var) ,(>> se) ,(>> cont))]
+      [`((lambda ,args ,body) . ,vals)
+       (define (sub? a v) (and (caddr a)
+                               (or (= 1 (cadr a))
+                                   (constant? v)
+                                   (symbol? v))))
+       (define (sub-lst? as vs)
+         ; assert (= (length as) (length vs))
+         (cond
+          [(null? as) #f]
+          [(sub? (car as) (car vs)) #t]
+          [else (sub-lst? (cdr as) (cdr vs))]))
+       (define (iter new-as new-vs as vs new-env)
+         ; assert (= (length as) (length vs))
+         (if (null? as)
+             (if (null? new-as)
+                 (>>/e body new-env)
+                 `((lambda ,new-as ,(>>/e body new-env)) . ,new-vs))
+             (let ((a (car as))
+                   (v (car vs))
+                   (as (cdr as))
+                   (vs (cdr vs)))
+               (cond
+                [(= 0 (cadr a)) (iter new-as new-vs as vs new-env)]
+                [(sub? a v)
+                 (iter new-as new-vs as vs (extend-env new-env (car a) (>> v)))]
+                [else (let ((new-a (cons (newvar) (cdr a))))
+                        (iter (pushback new-as new-a)
+                              (pushback new-vs (>> v))
+                              as
+                              vs
+                              (extend-env new-env (car a) (car new-a))))]))))
+       (let ((nvars (length args))
+             (nvals (length vals)))
+         (if (= nvars nvals)
+             (if (sub-lst? args vals)
+                 (iter '() '() args vals env)
+                 `((lambda ,args ,(>> body)) . ,(map >> vals)))
+             (report-num-args-not-match nvars nvals)))]
+      [`(lambda ,as ,b)
+       (if (null? env)
+           `(lambda ,as ,(>> b))
+           (let ((new-as (map (lambda (a) (cons (newvar) (cdr a))) as)))
+             `(lambda ,new-as
+                ,(>>/e b (extend-env-all env
+                                         (map car as)
+                                         (map car new-as))))))]
+      [`(letrec ,decs ,body)
+       (if (null? env)
+           `(letrec ,(map (lambda (dec)
+                            `(,(dec-var dec)
+                              ,(dec-args dec)
+                              ,(>> (dec-body dec))))
+                          decs)
+              ,(>> body))
+           (let* ((fs (map dec-var decs))
+                  (new-fs (map (lambda (a) (newvar)) fs))
+                  (new-env (extend-env-all env fs new-fs)))
+             `(letrec ,(map (lambda (new-f&dec)
+                              (let* ((new-f (car new-f&dec))
+                                     (dec (cdr new-f&dec))
+                                     (as (dec-args dec))
+                                     (new-as (map (lambda (a) (newvar)) as)))
+                                `(,new-f
+                                  ,new-as
+                                  ,(>>/e (dec-body dec)
+                                         (extend-env-all new-env as new-as)))))
+                            (map cons new-fs decs))
+                ,(>>/e body new-env))))]
+      [else (pass cps-exp >>)]))
+  (>>/e cps-exp '()))
+
+(define (eta-reduction cps-exp)
+  (define >> eta-reduction)
+  (define (check-args? args vals)
+    (cond
+     [(null? args) (null? vals)]
+     [(null? vals) #f]
+     [(and (= 1 (cadar args))
+           (eqv? (caar args) (car vals)))
+      (check-args? (cdr args) (cdr vals))]
+     [else #f]))
+  (match cps-exp
+    [`(lambda ,args (app ,f . ,vals))
+     (if (check-args? args vals)
+         (>> f)
+         `(lambda ,args (app ,(>> f) . ,(map >> vals))))]
+    [else (pass cps-exp >>)]))
+
+(define (constant-folding cps-exp)
+  (define opd+ (mkvar '+))
+  (define opd* (mkvar '*))
+  (define opd- (mkvar '-))
+  (define opdremainder (mkvar 'remainder))
+  (define opdzero? (mkvar 'zero?))
+  (define (eqv-to? v) (lambda (x) (eqv? x v)))
+  (define >> constant-folding)
+  (define (pick-num&cont-f exps opd f)
+    (partition-last2-f
+     exps
+     (lambda (cont econt vals)
+       (define (iter nums rest vals)
+         (cond
+          [(null? vals)
+           (f (>> cont)
+              (>> econt)
+              (apply opd (reverse nums))
+              (map >> (reverse rest)))]
+          [(number? (car vals))
+           (iter (cons (car vals) nums) rest (cdr vals))]
+          [else
+           (iter nums (cons (car vals) rest) (cdr vals))]))
+       (iter '() '() vals))))
+  (match cps-exp
+    [`(if ,se ,e2 ,e3)
+     (if (boolean? se)
+         (if se (>> e2) (>> e3))
+         `(if ,(>> se) ,(>> e2) ,(>> e3)))]
+    [(cons (? (eqv-to? opd+)) exps)
+     (pick-num&cont-f
+      exps
+      +
+      (lambda (cont econt ret rest)
+        (cond
+         [(null? rest) `(app ,cont ,ret)]
+         [(= 0 ret)
+          (cons opd+ (pushback rest cont econt))]
+         [else
+          (cons opd+ (pushback rest ret cont econt))])))]
+    [(cons (? (eqv-to? opd*)) exps)
+     (pick-num&cont-f
+      exps
+      *
+      (lambda (cont econt ret rest)
+        (cond
+         [(null? rest) `(app ,cont ,ret)]
+         [(= 1 ret)
+          (cons opd* (pushback rest cont econt))]
+         [else
+          (cons opd* (pushback rest ret cont econt))])))]
+    [(cons (? (eqv-to? opd-)) `(,e1 . ,exps))
+     (pick-num&cont-f
+      exps
+      +
+      (lambda (cont econt ret rest)
+        (cond
+         [(not (number? e1))
+          (if (= 0 ret)
+              (cons opd- (cons e1 (pushback rest cont econt)))
+              (cons opd- (cons e1 (pushback rest ret cont econt))))]
+         [(null? rest) `(app ,cont ,(- e1 ret))]
+         [else
+          (cons opd- (cons (- e1 ret) (pushback rest cont econt)))])))]
+    [(cons (? (eqv-to? opdremainder)) exps)
+     (let ((v1 (car exps))
+           (v2 (cadr exps))
+           (cont (caddr exps))
+           (econt (cadddr exps)))
+       (if (and (number? v1) (number? v2))
+           `(app ,(>> cont) ,(remainder v1 v2))
+           `(,opdremainder . ,(map >> exps))))]
+    [(cons (? (eqv-to? opdzero?)) exps)
+     (let ((v (car exps))
+           (cont (cadr exps))
+           (econt (caddr exps)))
+       (if (number? v)
+           `(app ,(>> cont) ,(zero? v))
+           `(,opdzero? . ,(map >> exps))))]
+    [else (pass cps-exp >>)]))
 
 ; value-of
 (define (value-of cps-exp env)
@@ -275,20 +644,24 @@
        (value-of body (extend-env-letrec env vars argss bodies)))]
     ; if
     [`(if ,se ,e2 ,e3)
-     (if (true? (>> se)) (value-of e2 env) (value-of e3 env))]
+     (let ((val (>> se)))
+       (cond
+        [(true? val) (value-of e2 env)]
+        [(false? val) (value-of e3 env)]
+        [else (report-if-condition-not-boolean val)]))]
     ; set!
-    [`(set! ,var ,se ,cont, econt)
+    [`(set! ,var ,se ,cont)
      (setref! (apply-env env var) (>> se))
      (apply-closure (>> cont) (list (void)))]
     ; application
-    (`(,sef . ,ses)
+    (`(app ,sef . ,ses)
      (apply-proc (>> sef) (map >> ses)))))
 
 ; apply-proc
 (define (apply-proc proc vals)
   (cond
    [(closure? proc) (apply-closure proc vals)]
-   [(operator? proc) (apply-opt proc vals)]
+   [(operation? proc) (apply-opd proc vals)]
    [else (report-not-a-proc proc)]))
 
 ; closure
@@ -372,10 +745,13 @@
   (vector-ref the-store (reference-n ref)))
 
 (define (setref! ref val)
-  (vector-set! the-store (reference-n ref) val))
+  (let ((i (reference-n ref)))
+    (if (< i the-num-opds)
+        (report-immutable-variable (operation-name (deref ref)))
+        (vector-set! the-store i val))))
 
 (define (store-info)
-  (let* ((start (length opt-table))
+  (let* ((start the-num-opds)
          (size (- the-store-offset start))
          (vec (make-vector size)))
     (define (iter i)
@@ -387,8 +763,8 @@
     (iter 0)
     (cons start vec)))
 
-; opt
-(struct operator (name opt) #:transparent)
+; opd
+(struct operation (name opd) #:transparent)
 (struct mutpair (left-ref right-ref) #:transparent)
 
 (define (-pair vl vr) (mutpair (newref vl) (newref vr)))
@@ -407,9 +783,9 @@
 (define (true? x) (eqv? x #t))
 (define (false? x) (eqv? x #f))
 
-(define opt-table
+(define opd-table
   (map (lambda (p)
-         (cons (car p) (operator (car p) (cdr p))))
+         (cons (car p) (operation (car p) (cdr p))))
        (list
         (cons 'void void)
         (cons '+ +)
@@ -424,21 +800,20 @@
         (cons 'setleft! -setleft!)
         (cons 'setright! -setright!)
         (cons 'print -print))))
+(define the-num-opds (length opd-table))
+
+(define (in-opd-table s) (assoc s opd-table))
 
 (define (init-env)
-  (extend-env-let (empty-env) (map car opt-table) (map cdr opt-table)))
+  (extend-env-let (empty-env)
+                  (map (lambda (o) (mkvar (car o))) opd-table)
+                  (map cdr opd-table)))
 
-(define (apply-opt opt vals)
-  (define (partition-last-f racc lst f)
-    ; assert (>= (length lst) 2)
-    (if (null? (cddr lst))
-        (f (car lst) (cadr lst) (reverse racc))
-        (partition-last-f (cons (car lst) racc) (cdr lst) f)))
-  (partition-last-f '()
-                    vals
-                    (lambda (cont econt vals)
-                      (apply-closure cont
-                                     (list (apply (operator-opt opt) vals))))))
+(define (apply-opd opd vals)
+  (partition-last2-f vals
+                     (lambda (cont econt vals)
+                       (apply-closure cont
+                                      (list (apply (operation-opd opd) vals))))))
 
 ; gc
 (define (gc env)
@@ -492,6 +867,9 @@
 (define (report-unbound-var var)
   (error "[Error] unbound var:" var))
 
+(define (report-if-condition-not-boolean val)
+  (error "[Error] if condition not boolean:" val))
+
 (define (report-not-a-proc proc)
   (error "[Error] not a procedure:" proc))
 
@@ -500,6 +878,9 @@
 
 (define (report-out-of-memory)
   (error "[Error] running out of memory:" (store-info)))
+
+(define (report-immutable-variable var)
+  (error "[Error] immutable variable:" var))
 
 ; test
 (require "test-cases.rkt")

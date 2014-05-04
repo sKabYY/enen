@@ -9,7 +9,11 @@
 ;            | (iszero Expression)
 ;            | (Expression Expression)
 
-(define (interp exp1) (value-of/k (translate exp1) (end-cont)))
+(define (interp exp1)
+  (set-exp! (translate exp1))
+  (set-cont! (end-cont))
+  (set-pc! value-of/k)
+  (mainloop))
 
 (define (translate exp1)
   (match exp1
@@ -37,27 +41,46 @@
     [`(,e1 ,e2) `(,(translate e1) ,(translate e2))]
     [else exp1]))
 
-(define (value-of/k exp1 cont)
-  (match exp1
+(define the-exp 'uninitialized)
+(define the-cont 'uninitialized)
+(define the-pc 'uninitialized)
+(define (set-exp! exp1) (set! the-exp exp1))
+(define (set-cont! cont) (set! the-cont cont))
+(define (set-pc! pc) (set! the-pc pc))
+
+(define (mainloop)
+  (if the-pc
+      (begin
+        (the-pc)
+        (mainloop))
+      the-exp))
+
+(define (value-of/k)
+  (match the-exp
     ; a variable
-    [(? symbol? s) (apply-cont cont s)]
+    [(? symbol? s) (set-pc! apply-cont)]
     ; a number
-    [(? number? n) (apply-cont cont n)]
+    [(? number? n) (set-pc! apply-cont)]
     ; a procedure
-    [`(lambda ,a ,b) (apply-cont cont exp1)]
+    [`(lambda ,a ,b) (set-pc! apply-cont)]
     ; a recursive procedure
     [`(fix ,f ,a ,b)
-     (apply-cont cont `(lambda ,a ,(substitute b f exp1)))]
+     (set-exp! `(lambda ,a ,(substitute b f the-exp)))
+     (set-pc! apply-cont)]
     ; primitive operations
     [`(+ ,e1 ,e2)
-     (value-of/k e1 (opd-cont cont + (list e2) '()))]
+     (set-cont! (opd-cont the-cont + (list e2) '()))
+     (set-exp! e1)]
     [`(- ,e1 ,e2)
-     (value-of/k e1 (opd-cont cont - (list e2) '()))]
+     (set-cont! (opd-cont the-cont - (list e2) '()))
+     (set-exp! e1)]
     [`(iszero ,e1)
-     (value-of/k e1 (opd-cont cont iszero '() '()))]
+     (set-cont! (opd-cont the-cont iszero '() '()))
+     (set-exp! e1)]
     ; an application
     [`(,e1 ,e2)
-     (value-of/k e1 (arg-cont cont e2))]))
+     (set-cont! (arg-cont the-cont e2))
+     (set-exp! e1)]))
 
 (define (substitute exp1 var val)
   (define (>> e) (substitute e var val))
@@ -102,30 +125,39 @@
   (string->symbol (string-append "#" (number->string the-temp-idx))))
 
 ; continuation
-(define (apply-cont cont v) (cont v))
+(define (apply-cont) (the-cont))
 
 (define (end-cont)
-  (lambda (v)
-    (begin
+  (lambda ()
+      (set-exp! the-exp)
       (displayln ">> Done!")
-      v)))
+      (set-pc! #f)))
 
 (define (arg-cont cont rand-exp)
-  (lambda (v)
-    (value-of/k rand-exp (fun-cont cont v))))
+  (lambda ()
+    (set-cont! (fun-cont cont the-exp))
+    (set-exp! rand-exp)
+    (set-pc! value-of/k)))
 
 (define (fun-cont cont rator)
-  (lambda (v)
+  (lambda ()
     (match rator
       [`(lambda ,var ,body)
-       (value-of/k (substitute body var v) cont)])))
+       (set-cont! cont)
+       (set-exp! (substitute body var the-exp))
+       (set-pc! value-of/k)])))
 
 (define (opd-cont cont opd exps vals)
-  (lambda (v)
+  (lambda ()
     (if (null? exps)
-        (value-of/k (apply opd (append vals (list v))) cont)
-        (value-of/k (car exps)
-                    (opd-cont cont opd (cdr exps) (append vals (list v)))))))
+        (begin
+          (set-cont! cont)
+          (set-exp! (apply opd (append vals (list the-exp))))
+          (set-pc! value-of/k))
+        (begin
+          (set-cont! (opd-cont cont opd (cdr exps) (append vals (list the-exp))))
+          (set-exp! (car exps))
+          (set-pc! value-of/k)))))
 
 ; test
 (require "test-cases.rkt")
