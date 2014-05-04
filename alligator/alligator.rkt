@@ -9,7 +9,7 @@
 ;            | (set! Variable Expression)
 ;            | (letcc Variable Expression)
 ;            | (raise Expression)
-;            | (catch Expression Variable Expression)
+;            | (catch Expression with Variable Expression)
 ;            | (Expression Expression*)
 ;
 ; Value = Number
@@ -89,7 +89,8 @@
     ; a raise expression
     [`(raise ,e) `(raise ,(>> e))]
     ; a catch expression
-    [`(catch ,body ,var ,p-body) `(catch ,(>> body) ,var ,(>> p-body))]
+    [`(catch ,body with ,var ,p-body)
+     `(catch ,(>> body) with ,var ,(>> p-body))]
     ; a if expression
     [`(if ,e1 ,e2 ,e3)
      `((ifv ,(>> e1) (lambda () ,(>> e2)) (lambda () ,(>> e3))))]
@@ -138,7 +139,7 @@
     [`(raise ,e)
      (value-of/k e env (raise-cont cont))]
     ; a catch expression
-    [`(catch ,body ,var ,p-body)
+    [`(catch ,body with ,var ,p-body)
      (value-of/k body env (catch-cont cont env var p-body))]
     ; an application
     [`(,ef . ,exps)

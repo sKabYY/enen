@@ -10,7 +10,7 @@
 ;            | (set! Variable Expression)
 ;            | (letcc Variable Expression)
 ;            | (raise Expression)
-;            | (catch Expression Variable Expression)
+;            | (catch Expression with Variable Expression)
 ;            | (Expression Expression*)
 ;
 ; Value = Number
@@ -150,7 +150,8 @@
     ; a raise expression
     [`(raise ,e) `(raise ,(>> e))]
     ; a catch expression
-    [`(catch ,body ,var ,p-body) `(catch ,(>> body) ,var ,(>> p-body))]
+    [`(catch ,body with ,var ,p-body)
+     `(catch ,(>> body) with ,var ,(>> p-body))]
     ; a let expression
     [`(let ,decs ,body)
      (let ((vars (map car decs))
@@ -242,8 +243,8 @@
       [`(set! ,v ,e) `(set! ,v ,(>> e))]
       [`(letcc ,v ,e) `(letcc ,v ,(>> e))]
       [`(raise ,e) `(raise ,(>> e))]
-      [`(catch ,body ,var ,p-body)
-       `(catch ,(>> body) ,var ,(>>/c p-body (list var)))]
+      [`(catch ,body with ,var ,p-body)
+       `(catch ,(>> body) with ,var ,(>>/c p-body (list var)))]
       [(? list? exps) (map >> exps)]))
   (opd-translate/c exp1 '()))
 
@@ -317,7 +318,7 @@
          (let ((w (newvar)))
            (>>/k e `(lambda (,w) (app ,econt ,w)) econt)))]
     ; a catch expression (the catch expression disappears)
-    [`(catch ,body ,var ,p-body)
+    [`(catch ,body with ,var ,p-body)
      (>>/k body cont `(lambda (,var) ,(>> p-body)))]
     ; an application
     [`(,ef . ,exps)
@@ -448,7 +449,7 @@
     (match cps-exp
       [(? symbol? s) (apply-env env s)]
       [`(set! ,var ,se ,cont) `(set! ,(>> var) ,(>> se) ,(>> cont))]
-      [`((lambda ,args ,body) . ,vals)
+      [`(app (lambda ,args ,body) . ,vals)
        (define (sub? a v) (and (caddr a)
                                (or (= 1 (cadr a))
                                    (constant? v)
@@ -464,7 +465,7 @@
          (if (null? as)
              (if (null? new-as)
                  (>>/e body new-env)
-                 `((lambda ,new-as ,(>>/e body new-env)) . ,new-vs))
+                 `(app (lambda ,new-as ,(>>/e body new-env)) . ,new-vs))
              (let ((a (car as))
                    (v (car vs))
                    (as (cdr as))
@@ -484,7 +485,7 @@
          (if (= nvars nvals)
              (if (sub-lst? args vals)
                  (iter '() '() args vals env)
-                 `((lambda ,args ,(>> body)) . ,(map >> vals)))
+                 `(app (lambda ,args ,(>> body)) . ,(map >> vals)))
              (report-num-args-not-match nvars nvals)))]
       [`(lambda ,as ,b)
        (if (null? env)
@@ -565,7 +566,7 @@
      (if (boolean? se)
          (if se (>> e2) (>> e3))
          `(if ,(>> se) ,(>> e2) ,(>> e3)))]
-    [(cons (? (eqv-to? opd+)) exps)
+    [(cons app (cons (? (eqv-to? opd+)) exps))
      (pick-num&cont-f
       exps
       +
@@ -573,10 +574,10 @@
         (cond
          [(null? rest) `(app ,cont ,ret)]
          [(= 0 ret)
-          (cons opd+ (pushback rest cont econt))]
+          `(app ,opd+ . ,(pushback rest cont econt))]
          [else
-          (cons opd+ (pushback rest ret cont econt))])))]
-    [(cons (? (eqv-to? opd*)) exps)
+          `(app ,opd+ . ,(pushback rest ret cont econt))])))]
+    [(cons app (cons (? (eqv-to? opd*)) exps))
      (pick-num&cont-f
       exps
       *
@@ -584,10 +585,10 @@
         (cond
          [(null? rest) `(app ,cont ,ret)]
          [(= 1 ret)
-          (cons opd* (pushback rest cont econt))]
+          `(app ,opd* . ,(pushback rest cont econt))]
          [else
-          (cons opd* (pushback rest ret cont econt))])))]
-    [(cons (? (eqv-to? opd-)) `(,e1 . ,exps))
+          `(app ,opd* . ,(pushback rest ret cont econt))])))]
+    [(cons app (cons (? (eqv-to? opd-)) `(,e1 . ,exps)))
      (pick-num&cont-f
       exps
       +
@@ -595,26 +596,26 @@
         (cond
          [(not (number? e1))
           (if (= 0 ret)
-              (cons opd- (cons e1 (pushback rest cont econt)))
-              (cons opd- (cons e1 (pushback rest ret cont econt))))]
+              `(app ,opd- ,e1 . ,(pushback rest cont econt))
+              `(app ,opd- ,e1 . ,(pushback rest ret cont econt)))]
          [(null? rest) `(app ,cont ,(- e1 ret))]
          [else
-          (cons opd- (cons (- e1 ret) (pushback rest cont econt)))])))]
-    [(cons (? (eqv-to? opdremainder)) exps)
+          `(app ,opd- ,(- e1 ret) . ,(pushback rest cont econt))])))]
+    [(cons app (cons (? (eqv-to? opdremainder)) exps))
      (let ((v1 (car exps))
            (v2 (cadr exps))
            (cont (caddr exps))
            (econt (cadddr exps)))
        (if (and (number? v1) (number? v2))
            `(app ,(>> cont) ,(remainder v1 v2))
-           `(,opdremainder . ,(map >> exps))))]
-    [(cons (? (eqv-to? opdzero?)) exps)
+           `(app ,opdremainder . ,(map >> exps))))]
+    [(cons app (cons (? (eqv-to? opdzero?)) exps))
      (let ((v (car exps))
            (cont (cadr exps))
            (econt (caddr exps)))
        (if (number? v)
            `(app ,(>> cont) ,(zero? v))
-           `(,opdzero? . ,(map >> exps))))]
+           `(app ,opdzero? . ,(map >> exps))))]
     [else (pass cps-exp >>)]))
 
 ; value-of

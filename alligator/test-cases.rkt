@@ -182,8 +182,8 @@
   (call/cc (lambda (return) (f return 111)))) 111
 
 (raise 123) 123
-(catch 11 e e) 11
-(catch (raise 22) e e) 22
+(catch 11 with e e) 11
+(catch (raise 22) with e e) 22
 
 (let ((index (lambda (n lst)
                (letrec ((inner
@@ -193,7 +193,7 @@
                              (if (zero? (- n (left lst)))
                                  0
                                  (+ 1 (inner (right lst)))))))
-                 (catch (inner lst) e -1)))))
+                 (catch (inner lst) with e -1)))))
   (index 5 (pair 1 (pair 2 (pair 0 0))))) -1
 
 (let ((index (lambda (n lst)
@@ -204,14 +204,14 @@
                              (if (zero? (- n (left lst)))
                                  0
                                  (+ 1 (inner (right lst)))))))
-                 (catch (inner lst) e -1)))))
+                 (catch (inner lst) with e -1)))))
   (index 2 (pair 1 (pair 2 (pair 0 0))))) 1
 
 (letcc c (+ 11 (raise (cc c 1)))) 1
 
 (catch
  (let ((a 1)) (+ (letcc k (+ 122 (raise k))) a))
- k (let ((a 10)) (cc k a))) 11
+ with k (let ((a 10)) (cc k a))) 11
 
 ((lambda (a b) (set! a b)) 10 12) ,(void)
 
@@ -228,5 +228,23 @@
    ((lambda (x y) (+ a x y)) a b))
  11
  22) 44
+
+(catch
+ (+ 11 (letcc resume (raise (pair 2 resume))))
+ with p
+ (let ((n (left p))
+       (resume (right p)))
+   (if (zero? (- n 2))
+       (resume n)
+       n))) 13
+
+(catch
+ (+ 11 (letcc resume (raise (pair 12 resume))))
+ with p
+ (let ((n (left p))
+       (resume (right p)))
+   (if (zero? (- n 2))
+       (resume n)
+       n))) 12
 
 ))
