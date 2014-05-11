@@ -10,8 +10,9 @@
 ;            | (Expression Expression)
 
 (define (interp exp1)
-  (value-of/k (closure (translate exp1) (empty-env))
-              (end-cont)))
+  (closure-exp
+   (value-of/k (closure (translate exp1) (empty-env))
+               (end-cont))))
 
 (define (translate exp1)
   (match exp1
@@ -79,7 +80,7 @@
   (match (closure-exp clo)
     [`(lambda ,arg ,body)
      (value-of/k (closure body
-                          (extend-env (closure-env clo) arg arg-clo))
+                          (extend-env (closure-env arg-clo) arg arg-clo))
                  cont)]))
 
 ; environment
@@ -134,4 +135,4 @@
 
 ; test
 (require "test-cases.rkt")
-(test interp cek-cases)
+(test interp cek0-dynamic-cases)

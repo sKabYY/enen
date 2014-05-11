@@ -10,7 +10,8 @@
 ;            | (Expression Expression)
 
 (define (interp exp1)
-  (value-of/k (closure (translate exp1) (empty-env))
+  (value-of/k (translate exp1)
+              (empty-env)
               (end-cont)))
 
 (define (translate exp1)
@@ -39,33 +40,32 @@
     [`(,e1 ,e2) `(,(translate e1) ,(translate e2))]
     [else exp1]))
 
-(define (value-of/k clo cont)
-  (let ((exp1 (closure-exp clo))
-        (env (closure-env clo)))
-    (match exp1
-      ; a variable
-      [(? symbol? s)
-       (apply-cont cont (apply-env env s))]
-      ; a number
-      [(? number? n)
-       (apply-cont cont (closure n env))]
-      ; a procedure
-      [`(lambda ,a ,b)
-       (apply-cont cont (closure exp1 env))]
-      ; a recursive procedure
-      [`(fix ,f ,a ,b)
-       (apply-cont cont
-                   (closure `(lambda ,a ,b) (extendrec-env env f a b)))]
-      ; primitive operations
-      [`(+ ,e1 ,e2)
-       (value-of/k (closure e1 env) (opt-cont cont + (list (closure e2 env)) '()))]
-      [`(- ,e1 ,e2)
-       (value-of/k (closure e1 env) (opt-cont cont - (list (closure e2 env)) '()))]
-      [`(iszero ,e1)
-       (value-of/k (closure e1 env) (opt-cont cont iszero '() '()))]
-      ; an application
-      [`(,e1 ,e2)
-       (value-of/k (closure e1 env) (arg-cont cont (closure e2 env)))])))
+(define (value-of/k exp1 env cont)
+  (match exp1
+    ; a variable
+    [(? symbol? s)
+     (apply-cont cont env (apply-env env s))]
+    ; a number
+    [(? number? n)
+     (apply-cont cont env n)]
+    ; a procedure
+    [`(lambda ,a ,b)
+     (apply-cont cont env exp1)]
+    ; a recursive procedure
+    [`(fix ,f ,a ,b)
+     (apply-cont cont
+                 (extendrec-env env f a b)
+                 `(lambda ,a ,b))]
+    ; primitive operations
+    [`(+ ,e1 ,e2)
+     (value-of/k e1 env (opt-cont cont + (list e2) '()))]
+    [`(- ,e1 ,e2)
+     (value-of/k e1 env (opt-cont cont - (list e2) '()))]
+    [`(iszero ,e1)
+     (value-of/k e1 env (opt-cont cont iszero '() '()))]
+    ; an application
+    [`(,e1 ,e2)
+     (value-of/k e1 env (arg-cont cont e2))]))
 
 (define (iszero n)
   (if (= n 0)
@@ -75,14 +75,14 @@
 ; closure
 (struct closure (exp env) #:transparent)
 
-(define (apply-closure/k clo arg-clo cont)
-  (match (closure-exp clo)
+(define (apply-proc/k proc env val cont)
+  (match proc
     [`(lambda ,arg ,body)
-     (value-of/k (closure body (extend-env (closure-env arg-clo) arg arg-clo)) cont)]))
+     (value-of/k body (extend-env env arg val) cont)]))
 
 ; environment
 (struct empty-env () #:transparent)
-(struct extend-env (env var clo) #:transparent)
+(struct extend-env (env var val) #:transparent)
 (struct extendrec-env (env var arg body) #:transparent)
 
 (define (apply-env env search-var)
@@ -91,7 +91,7 @@
     (report-unbound-var search-var)]
    [(extend-env? env)
     (if (eqv? search-var (extend-env-var env))
-        (extend-env-clo env)
+        (extend-env-val env)
         (apply-env (extend-env-env env) search-var))]
    [(extendrec-env? env)
     (if (eqv? search-var (extendrec-env-var env))
@@ -105,27 +105,28 @@
 
 ; continuation
 (define (end-cont)
-  (lambda (c)
+  (lambda (env v)
     (displayln ">> Done!")
-    c))
+    v))
 
-(define (arg-cont cont rand-clo)
-  (lambda (c)
-    (value-of/k rand-clo (fun-cont cont c))))
+(define (arg-cont cont rand-exp)
+  (lambda (env v)
+    (value-of/k rand-exp env (fun-cont cont v))))
 
-(define (fun-cont cont rator-clo)
-  (lambda (c)
-    (apply-closure/k rator-clo c cont)))
+(define (fun-cont cont rator)
+  (lambda (env v)
+    (apply-proc/k rator env v cont)))
 
-(define (opt-cont cont opt clos vals)
-  (lambda (c)
-    (let ((new-vals (append vals (list (closure-exp c)))))
-      (if (null? clos)
-          (apply-cont cont (closure (apply opt new-vals) (empty-env)))
-          (value-of/k (car clos)
-                      (opt-cont cont opt (cdr clos) new-vals))))))
+(define (opt-cont cont opt exps vals)
+  (lambda (env v)
+    (let ((new-vals (append vals (list v))))
+      (if (null? exps)
+          (apply-cont cont env (apply opt new-vals))
+          (value-of/k (car exps)
+                      env
+                      (opt-cont cont opt (cdr exps) new-vals))))))
 
-(define (apply-cont cont clo) (cont clo))
+(define (apply-cont cont env val) (cont env val))
 
 (define (report-unbound-var var)
   (error "unbound var" var))

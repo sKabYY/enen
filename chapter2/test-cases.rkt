@@ -17,11 +17,33 @@
 (define cek0-dynamic-cases
   '(
 
+12
+(+ 12 13)
+(- 32 23)
+(lambda x (+ x 1))
+((lambda x (- x 1)) 22)
+(((lambda x x) (lambda y y)) 11)
+
+(iszero 0)
+(iszero 1)
+
 (let a 1
   (let p (lambda x
            (+ a x))
     (let a 2
       (p 10))))
+
+(let double (lambda dummy not-reach-here)
+  (let double (lambda n
+                (if (iszero n)
+                    0
+                    (+ 2 (double (- n 1)))))
+    (double 4)))
+
+(((iszero 0) 1) 2)
+(((iszero 1) 1) 2)
+(if (iszero 0) 1 2)
+(if (iszero 1) 1 2)
 
 ))
 
